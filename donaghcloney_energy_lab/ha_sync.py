@@ -5,7 +5,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 DATA = Path('/data')
@@ -337,11 +337,26 @@ def build_replay(entities, hourly_data, recent_data):
     }
 
 
+def _valid_bridge_url(value):
+    try:
+        url = urlsplit(value)
+        port = url.port
+    except ValueError:
+        return False
+    return (
+        url.scheme == 'http' and url.hostname == 'homeassistant'
+        and url.username is None and url.password is None
+        and (port is None or 1 <= port <= 65535)
+        and url.path == '/api/energy_lab_bridge'
+        and not url.query and not url.fragment
+    )
+
+
 def sync_once():
     options = _read_options()
     base_url = str(options.get('bridge_url', '')).strip()
     secret = str(options.get('bridge_secret', '')).strip()
-    if base_url != 'http://homeassistant:8123/api/energy_lab_bridge' or not secret:
+    if not _valid_bridge_url(base_url) or not secret:
         return {'ok': False, 'error': 'Configure the local read-only bridge URL and shared key in the Energy Lab app settings.'}
     try:
         history_days = min(400, max(30, int(options.get('history_days', DEFAULT_DAYS))))

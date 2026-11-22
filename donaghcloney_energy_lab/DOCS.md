@@ -18,7 +18,9 @@ Install the bridge as a custom integration via Home Assistant Marketplace from t
 same GitHub repository URL, then add it in Settings > Devices & services.
 
 Set the matching shared key in the bridge and the app configuration. The app contacts
-the bridge at `http://homeassistant:8123/api/energy_lab_bridge`. Keep the key in Home
+the bridge on Home Assistant’s internal HTTP port. Set `bridge_url` to
+`http://homeassistant:<port>/api/energy_lab_bridge`, using the port shown in
+**Settings > System > Network > HTTP server**. Keep the key in Home
 Assistant. Use **Sync Home Assistant history** to check the connection and data coverage.
 When configured, the app also attempts a sync at startup and every six hours.
 
