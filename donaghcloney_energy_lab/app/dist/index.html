@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Donaghcloney · Home Energy Lab</title>
+  <meta name="description" content="An energy simulator and private historical heating replay for Home Assistant.">
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header class="topbar"><a class="brand" href="./" aria-label="Home Energy Lab home"><span class="brandmark">⌁</span><span>home energy<span class="brandlight"> / lab</span></span></a><div class="topright"><span class="location">Donaghcloney, NI</span><span class="private"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 018 0v3"/></svg> Private · only you</span></div></header>
+<main>
+<section class="intro"><div><p class="eyebrow">YOUR HOME. YOUR ENERGY. YOUR WHAT-IF.</p><h1>Make every kilowatt count<span>.</span></h1><p class="introcopy">Explore how your battery, solar and heating work together.<br class="desktop"> Change a setting. See the difference across a typical day.</p></div><button class="textbutton" id="assumptionsButton">Model & assumptions <span aria-hidden="true">↗</span></button></section>
+<div class="workspace">
+<aside class="controls"><div class="controlheading"><div><p class="eyebrow">ADJUST YOUR SCENARIO</p><h2 id="editingTitle">Your setup</h2></div><button id="resetScenario" class="iconbutton" title="Reset this scenario" aria-label="Reset this scenario">↺</button></div><div id="controlTabs" class="controltabs" role="tablist" aria-label="Settings category"></div><div id="controlFields" class="controlfields" role="tabpanel"></div><div class="controlsfoot"><span class="dot"></span><span id="saveStatus" role="status">Saved in this browser</span></div></aside>
+<div class="results">
+<div class="scenarioheading"><div><p class="eyebrow">SCENARIO WORKSPACE</p><p class="subtle">Each scenario keeps its own settings.</p></div><button class="smallbutton" id="addScenario">+ Duplicate</button></div>
+<div id="scenarioTabs" class="scenariotabs" aria-label="Scenarios"></div>
+<div class="activebar"><label class="scenarioNameLabel">Scenario name <input id="scenarioName" maxlength="40" aria-label="Scenario name"></label><div><span class="badge" id="referenceBadge">REFERENCE</span><button class="textbutton compact" id="setReference">Use as reference</button><button class="textbutton compact danger" id="deleteScenario">Delete</button></div></div>
+<div id="warnings" class="warnings" role="status" aria-live="polite"></div>
+<section class="metrics" aria-label="Daily estimates"><article class="metric cost"><div class="metriclabel">Estimated daily cost <span title="Import charges + standing charge − export credit. Repeated-day estimate.">ⓘ</span></div><div class="metricvalue" id="costValue">—</div><p id="costDelta">Including standing charge</p></article><article class="metric"><div class="metriclabel">Grid import</div><div class="metricvalue" id="importValue">—</div><p id="importDetail">—</p></article><article class="metric"><div class="metriclabel">Day-rate import</div><div class="metricvalue" id="dayValue">—</div><p id="dayDetail">—</p></article><article class="metric"><div class="metriclabel">Solar used at home</div><div class="metricvalue" id="solarValue">—</div><p id="solarDetail">—</p></article></section>
+<section class="panel chartpanel"><div class="panelhead"><div><p class="eyebrow">A DAY IN YOUR HOME</p><h2>Energy, around the clock</h2></div><div class="segmented" id="chartModes" aria-label="Chart view"><button class="selected" data-mode="power" aria-pressed="true">Power</button><button data-mode="battery" aria-pressed="false">Battery</button></div></div><div class="chartlegend" id="chartLegend"></div><div id="chart" class="chart" tabindex="0" role="img" aria-label="Interactive daily energy chart. Use left and right arrow keys to inspect quarter-hour values."></div><div id="chartReadout" class="chartreadout" aria-live="polite"></div><div class="chartfoot"><span><i class="cheapkey"></i><span id="cheapCaption"></span></span><span>15-minute model · local clock times</span></div><p class="tablefoot">*Solar retained includes battery charging and its losses; it is not all delivered to appliances.</p></section>
+<section class="panel comparepanel"><div class="panelhead"><div><p class="eyebrow">THE BIGGER PICTURE</p><h2>Compare your scenarios</h2></div><button class="textbutton compact" id="exportCsv">Export CSV ↓</button></div><div class="tablewrap"><table><thead><tr><th scope="col">Scenario</th><th scope="col">Grid import</th><th scope="col">Day rate</th><th scope="col">Cost / day</th><th scope="col">vs reference</th></tr></thead><tbody id="comparisonRows"></tbody></table></div><p class="tablefoot">Same representative day repeated. Differences can include changes in demand or weather. No annual savings claim.</p></section>
+<section class="panel replaypanel" id="heatingReplay" aria-labelledby="replayTitle">
+ <div class="panelhead"><div><p class="eyebrow">HEATING REPLAY</p><h2 id="replayTitle">Compare heating against your measured history</h2></div><span class="badge">Read-only historical data</span></div>
+ <p class="fieldintro">Import a Home Assistant replay bundle to compare historical measurements with 15-minute heating estimates. “Measured”, “Calculated” and “Model estimate” are marked separately.</p>
+ <form id="replayImport">
+  <label>Private replay bundle <input id="replayFile" type="file" accept=".json,application/json" required></label>
+  <button class="smallbutton" id="replayUpload" disabled>Import or replace replay</button>
+ </form>
+ <p id="replayStatus" class="fieldintro" role="status"></p>
+ <div id="replayViews" hidden>
+ <div class="replaycontrols">
+  <label>Historical day<select id="replayDay"></select></label>
+  <label>Comfort target · sunroom °C<input id="comfortTarget" type="number" min="19" max="24" step="0.1" value="21.5"></label>
+  <label>Boost / soak flow °C<input id="flowTarget" type="number" min="48" max="52" step="0.5" value="50"></label>
+  <label class="checkfield"><input id="includeZendure" type="checkbox"> Include optional Zendure · 8.16 kWh / 0.8 kW</label>
+ </div>
+ <div class="replaytabs" id="replayTabs" role="tablist" aria-label="Heating replay views">
+  <button class="selected" data-replay-tab="weather" role="tab" aria-selected="true">Weather matches</button>
+  <button data-replay-tab="strategies" role="tab" aria-selected="false">Heating strategies</button>
+  <button data-replay-tab="events" role="tab" aria-selected="false">Compressor events</button>
+  <button data-replay-tab="validation" role="tab" aria-selected="false">Sunroom validation</button>
+ </div>
+ <div id="replayContent" class="replaycontent" role="tabpanel"></div>
+ </div>
+</section>
+<section class="bottomgrid"><article class="panel breakdown"><div class="panelhead"><div><p class="eyebrow">WHERE IT GOES</p><h2>Daily electricity demand</h2></div><span class="muted" id="loadTotal"></span></div><div id="loadBreakdown"></div></article><article class="panel balance"><div class="panelhead"><div><p class="eyebrow">CALCULATION CHECK</p><h2>Every kWh accounted for</h2></div><span id="balanceBadge" class="checkbadge">✓ Balanced</span></div><div id="balanceDetails"></div><button class="textbutton compact" id="validationButton">View calculation checks ↗</button></article></section>
+<details class="panel hourlypanel"><summary>Explore the 15-minute calculation <span>96 intervals ↓</span></summary><div class="tablewrap"><table><thead><tr><th>Time</th><th>Demand kW</th><th>Solar kW</th><th>Import kW</th><th>Charge kW</th><th>Discharge kW</th><th>Stored kWh</th><th>Net cost</th></tr></thead><tbody id="intervalRows"></tbody></table></div></details>
+</div></div>
+<footer><span>Built around your Donaghcloney home.</span><span>Planning estimates · <button class="footerlink" id="footerAssumptions">Read the assumptions</button></span></footer>
+</main>
+<dialog id="infoDialog"><div class="dialoghead"><span class="eyebrow">TRANSPARENT BY DESIGN</span><button class="iconbutton" id="closeDialog" aria-label="Close assumptions">×</button></div><div id="dialogContent"></div></dialog>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="./app.mjs"></script>
+</body></html>

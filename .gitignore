@@ -1,0 +1,16 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.env*
+*.csv
+*.db*
+*.sqlite*
+*.json
+*.zip
+*.tar*
+*.pem
+*.key
+/data/
+/private/
+**/data/
+**/replay-data.mjs

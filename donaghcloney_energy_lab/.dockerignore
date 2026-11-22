@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!server.py
+!app/
+!app/dist/
+!app/dist/index.html
+!app/dist/style.css
+!app/dist/app.mjs
+!app/dist/model.mjs
+!app/dist/heating.mjs
