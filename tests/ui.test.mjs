@@ -102,7 +102,7 @@ test('CSV export creates a download; deleting selected reference keeps valid ref
 test('HTML uses local assets, correct module paths, no remote telemetry or duplicate IDs',()=>{
  const ids=[...html.matchAll(/\bid="([^"]+)"/g)].map(m=>m[1]);assert.equal(ids.length,new Set(ids).size);
  for(const m of html.matchAll(/(?:src|href)="(\.\/[^\"]+)"/g)){if(m[1]==='./')continue;assert.ok(fs.existsSync(new URL(m[1],new URL('../donaghcloney_energy_lab/app/dist/',import.meta.url))));}
- const js=fs.readFileSync(new URL('../donaghcloney_energy_lab/app/dist/app.mjs',import.meta.url),'utf8');assert.deepEqual([...js.matchAll(/\bfetch\(([^,)]+)/g)].map(match=>match[1]),["'api/replay'","'api/replay'"]);assert.doesNotMatch(js,/XMLHttpRequest|sendBeacon|WebSocket/);
+ const js=fs.readFileSync(new URL('../donaghcloney_energy_lab/app/dist/app.mjs',import.meta.url),'utf8');assert.deepEqual([...js.matchAll(/\bfetch\(([^,)]+)/g)].map(match=>match[1]),["'api/replay'","'api/sync'","'api/replay?source=recorder'","'api/replay'","'api/sync-status'"]);assert.doesNotMatch(js,/XMLHttpRequest|sendBeacon|WebSocket/);
 });
 
 test('simulator starts before replay and accepts a private bundle through the import form',async()=>{
@@ -115,7 +115,8 @@ test('simulator starts before replay and accepts a private bundle through the im
  assert.equal($('replayViews').hidden,false);
  assert.equal($('replayDay').value,'2000-01-01');
  assert.match($('replayContent').innerHTML,/Measured ASHP electricity/);
- assert.equal(replayCalls[1].path,'api/replay');
- assert.equal(replayCalls[1].options.body,file);
- assert.equal(replayCalls[1].options.headers['X-Energy-Lab-Import'],'1');
+ const upload=replayCalls.find(call=>call.options?.method==='POST');
+ assert.equal(upload.path,'api/replay');
+ assert.equal(upload.options.body,file);
+ assert.equal(upload.options.headers['X-Energy-Lab-Import'],'1');
 });

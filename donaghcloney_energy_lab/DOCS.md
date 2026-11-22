@@ -8,7 +8,23 @@
 4. Select **Open Web UI**. Enable **Show in sidebar** if you want direct access from the sidebar.
 5. Confirm the daily simulator opens. To enable replay, select your private `replay-bundle.json` under **Heating replay** and choose **Import or replace replay**. Reload the page and check that the replay still opens.
 
-The app has no configuration options. Home Assistant authenticates the Ingress session and provides the administrator-only panel. No port is published.
+Manual replay works with the default app options. Home Assistant authenticates the Ingress session and provides the administrator-only panel. No port is published.
+
+## Optional Home Assistant history sync
+
+The app uses a local, read-only Energy Lab Bridge integration to pull selected Recorder
+statistics and hourly forecasts. The existing app store update installs the app only.
+Install the bridge as a custom integration via Home Assistant Marketplace from the
+same GitHub repository URL, then add it in Settings > Devices & services.
+
+Set the matching shared key in the bridge and the app configuration. The app contacts
+the bridge at `http://homeassistant:8123/api/energy_lab_bridge`. Keep the key in Home
+Assistant. Use **Sync Home Assistant history** to check the connection and data coverage.
+When configured, the app also attempts a sync at startup and every six hours.
+
+The app keeps the Recorder replay and its sync status under `/data`. Manual imports
+retain their own file and take precedence on startup. A successful manual sync opens
+the Recorder replay for the current session. App backups can include both replay files.
 
 ## Private replay data
 

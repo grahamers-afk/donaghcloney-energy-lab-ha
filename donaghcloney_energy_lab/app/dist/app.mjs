@@ -1,5 +1,5 @@
 import {DEFAULTS,simulate,DT,timeLabel,inWindow} from './model.mjs';
-import {useReplay,replayTargetDays,allReplayDays,dailyMeasurements,weatherMatchedDays,classifyCompressorEvents,compareHeatingStrategies,heldOutTemperatureValidation,heldOut15MinuteSunroomValidation,validateMeasuredReplay,HEATING_LIMITS} from './heating.mjs';
+import {useReplay,replayTargetDays,allReplayDays,dailyMeasurements,weatherMatchedDays,classifyCompressorEvents,compareHeatingSchedules,STANDARD_HEATING_SCHEDULES,heldOutTemperatureValidation,heldOut15MinuteSunroomValidation,validateMeasuredReplay,HEATING_LIMITS,modelFitSamples,forecastHours,liveSnapshot,forecastMeta} from './heating.mjs';
 const $=id=>document.getElementById(id), money=v=>new Intl.NumberFormat('en-GB',{style:'currency',currency:'GBP'}).format(v), num=(v,n=1)=>v.toFixed(n);
 const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const STORAGE='donaghcloney-energy-lab-v1';
@@ -91,9 +91,24 @@ const colors={load:'#6e7f75',solar:'#d8aa59',grid:'#8978b2',discharge:'#447f5f',
 const replayMoney=v=>Number.isFinite(v)?money(v):'—',replayNum=(v,n=2)=>Number.isFinite(v)?v.toFixed(n):'—';
 const replayDayLabel=d=>new Date(`${d}T12:00:00Z`).toLocaleDateString('en-GB',{day:'numeric',month:'short',timeZone:'UTC'});
 const replayDay=()=>$('replayDay').value;
+function timeValue(id,fallback){
+ const value=$(id)?.value||fallback,parts=value.split(':').map(Number);
+ return Number.isFinite(parts[0])&&Number.isFinite(parts[1])?parts[0]+parts[1]/60:0;
+}
+function configuredSchedules(){
+ const offset=Number($('wcOffset')?.value)||48,setbackTargetC=Number($('setbackTarget')?.value)||18;
+ const normalSetback=timeValue('normalSetback','08:00'),extendedSetback=timeValue('extendedSetback','10:00');
+ const boostStart=timeValue('boostStart','06:30'),boostEnd=timeValue('boostEnd','07:50'),soakStart=timeValue('soakStart','04:00'),soakEnd=timeValue('soakEnd','07:50');
+ const boostFlowC=Number($('boostFlow')?.value)||50,soakFlowC=Number($('soakFlow')?.value)||52;
+ return STANDARD_HEATING_SCHEDULES.map(s=>({...s,offsetC:offset,setbackTargetC,
+  setbackAt:s.id==='extended-wc'?extendedSetback:normalSetback,
+  ...(s.id==='short-boost'?{boostStart,boostEnd,boostFlowC}:{}),
+  ...(s.id==='full-soak'?{soakStart,soakEnd,soakFlowC}:{})
+ }));
+}
 function renderReplay(){
  const content=$('replayContent');if(!content||!replayDay())return;
- const day=replayDay(),target=Number($('comfortTarget').value)||21.5,flow=Number($('flowTarget').value)||50,zendure=$('includeZendure').checked;
+ const day=replayDay(),target=Number($('comfortTarget').value)||21.5,zendure=$('includeZendure').checked;
  if(replayTab==='weather'){
   const availableDays=allReplayDays(),targetDays=replayTargetDays();
   const {target:t,matches}=weatherMatchedDays(day,availableDays.length,7);
@@ -103,8 +118,10 @@ function renderReplay(){
   }).join('');
   content.innerHTML=`<div class="replaymetrics"><article><span>Measured ASHP electricity · selected 00–07 window</span><b>${replayNum(t.electricKwh,1)} kWh</b></article><article><span>Measured mean outdoor · wind</span><b>${replayNum(t.meanOutdoor,1)}°C · ${replayNum(t.meanWind,1)} mph</b></article><article><span>Measured sunroom range</span><b>${replayNum(t.sunroomMin,1)}–${replayNum(t.sunroomMax,1)}°C</b></article><article><span>Measured Libbi discharge</span><b>${replayNum(t.libbiDischargeKwh,1)} kWh</b></article><article><span>Calculated Libbi SOC change</span><b>${replayNum(t.socStart,0)}% → ${replayNum(t.socEnd,0)}%</b></article></div><h3>Automatic weather matches</h3><p>Distance combines outdoor temperature, wind, available gust and irradiance readings, and starting-room temperatures. The target and every date in the table use the same 00:00–07:00 GMT window. Lower distance is a closer match. Partial days are marked.</p><div class="tablewrap"><table><thead><tr><th>Day</th><th>Outdoor</th><th>Wind</th><th>Start sunroom</th><th>Estimated space heat</th><th>Match distance</th><th>Measured ASHP electricity</th><th>Measured Libbi discharge</th><th>Libbi SOC</th></tr></thead><tbody>${rows}</tbody></table></div><p class="tablefoot">Measured values are recorder summaries. “Space heat” is an estimated split of ASHP heat output after applying the replay’s DHW estimate. Distance is calculated, not a statistical probability. Nearest: ${matches.slice(0,3).map(x=>`${replayDayLabel(x.day)} (${replayNum(x.distance,2)})`).join(' · ')||'no complete matches'}.</p>`;
  }else if(replayTab==='strategies'){
-  const scenarios=compareHeatingStrategies(day,{flowC:flow,targetC:target,zendureEnabled:zendure}),measured=dailyMeasurements(day),val=heldOutTemperatureValidation().find(x=>x.room==='Sunroom'),rmse15=heldOut15MinuteSunroomValidation(),measuredRuns=classifyCompressorEvents().events.filter(x=>x.start.startsWith(day)).length;
-  content.innerHTML=`<div class="note"><b>Same comfort requirement:</b> every option uses ${target.toFixed(1)}°C sunroom target and the same observed weather, starting temperatures and household load. Flow/boost input is ${flow.toFixed(1)}°C; WC-only uses a 48°C offset (estimated target is offset − 0.8 × outdoor temperature). Scenarios are model estimates, not counterfactual measurements. Modelled “heat-call transitions” are not compressor starts.</div><div class="tablewrap"><table><thead><tr><th>Strategy</th><th>Modelled min sunroom</th><th>Hours below target −0.25°C</th><th>Heat-pump electric</th><th>Calculated whole-home cost</th><th>Heat-call transitions</th><th>Model Libbi discharge</th><th>Model minimum SOC</th><th>Zendure charge / discharge</th></tr></thead><tbody>${scenarios.map(x=>`<tr><td>${x.mode==='wc-only'?'WC-only':x.mode==='full-soak'?'Full soak':`${x.mode.slice(6)}-minute boost`}</td><td>${replayNum(x.minSunroom,2)}°C</td><td>${replayNum(x.unmetIntervals/4,1)} h</td><td>${replayNum(x.totalHeatElectric,1)} kWh</td><td>${replayMoney(x.totalCost)}</td><td>${x.starts}</td><td>${replayNum(x.libbiDischargedKwh,1)} kWh</td><td>${replayNum(x.minSoc/HEATING_LIMITS.libbiCapacityKwh*100,0)}%</td><td>${replayNum(x.zendureGridChargeKwh,1)} / ${replayNum(x.zendureDischargedKwh,1)} kWh</td></tr>`).join('')}</tbody></table></div><div class="replaymetrics"><article><span>Measured ASHP electricity · selected day</span><b>${replayNum(measured.electricKwh,1)} kWh</b></article><article><span>Measured sunroom min / max</span><b>${replayNum(measured.sunroomMin,1)} / ${replayNum(measured.sunroomMax,1)}°C</b></article><article><span>Measured compressor run segments</span><b>${measuredRuns}</b></article><article><span>Measured Libbi discharge</span><b>${replayNum(measured.libbiDischargeKwh,1)} kWh</b></article><article><span>Held-out hourly room RMSE</span><b>${replayNum(val?.rmse,2)}°C</b></article><article><span>Held-out 15-min conditional RMSE</span><b>${replayNum(rmse15.rmse,2)}°C</b></article></div><p class="tablefoot">Measured ASHP energy is shown separately from modeled space-heating electricity; DHW/auxiliary splitting is uncertain. Cost includes hourly house-load and modelled ASHP demand, modeled battery dispatch, 15.56/32.04p rates and 13.33p/day standing charge apportioned to the simulated period. Zendure, when enabled, starts empty and can only charge from grid 01:00–08:00. Costs are estimates, not a bill. The measured compressor run segments above are the comparator; modelled heat-call transitions are not predicted compressor starts. The held-out error gives a reference for the uncertainty in these comfort estimates.</p>`;
+  const schedules=configuredSchedules(),scenarios=compareHeatingSchedules(day,schedules,{targetC:target,zendureEnabled:zendure}),future=forecastHours.some(row=>row.day===day),measured=dailyMeasurements(day),val=heldOutTemperatureValidation().find(x=>x.room==='Sunroom'),rmse15=heldOut15MinuteSunroomValidation(),measuredRuns=classifyCompressorEvents().events.filter(x=>x.start.startsWith(day)).length;
+  const actualContext=future?`<div class="replaymetrics"><article><span>Actual sunroom start</span><b>${replayNum(liveSnapshot.sunroom?.value,1)}°C</b></article><article><span>Actual kitchen start</span><b>${replayNum(liveSnapshot.kitchen?.value,1)}°C</b></article><article><span>Actual living room / hallway</span><b>${replayNum(liveSnapshot.living_room?.value,1)} / ${replayNum(liveSnapshot.hallway?.value,1)}°C</b></article><article><span>Actual Libbi start / capacity</span><b>${replayNum(liveSnapshot.libbi_soc?.value,0)}% / ${replayNum(liveSnapshot.libbi_capacity?.value,1)} kWh</b></article><article><span>Outdoor now · wind</span><b>${replayNum(liveSnapshot.outdoor?.value,1)}°C · ${replayNum(liveSnapshot.wind?.value,1)} mph</b></article></div>`:`<div class="replaymetrics"><article><span>Measured ASHP electricity · selected day</span><b>${replayNum(measured.electricKwh,1)} kWh</b></article><article><span>Measured sunroom min / max</span><b>${replayNum(measured.sunroomMin,1)} / ${replayNum(measured.sunroomMax,1)}°C</b></article><article><span>Measured compressor run segments</span><b>${measuredRuns}</b></article><article><span>Measured Libbi discharge</span><b>${replayNum(measured.libbiDischargeKwh,1)} kWh</b></article></div>`;
+  const forecastInfo=future?`Weather source: ${esc(forecastMeta.weather_entity||'unknown')}; ${forecastMeta.target_day_rows||0}/24 hourly forecast points. Forecast solar: ${replayNum(forecastMeta.solar_forecast_kwh,2)} kWh. Forecast solar gain uses measured local hourly irradiance shape and is an estimate. No wood-fire heat is included. DHW uses a common 2.8 kWh model from 01:00–02:00; immersion contribution is set to zero because no timed immersion input was verified. Upstairs heating demand is not independently forecast; its current live state is not treated as a future call.`:'Historical replay day; all measured values below are actual recorder results.';
+  content.innerHTML=`<div class="note"><b>${future?'Forecast simulation':'Historical replay'} · ${esc(day)}.</b> ${future?'Starting rooms and Libbi are actual HA measurements captured at '+esc(liveSnapshot.captured_at||'unknown time')+'.':'All options use the same selected replay day.'} The four schedule results are simulated, not measurements. ${forecastInfo} ${future?'':'DHW electricity is common to all scenarios (2.8 kWh, 01:00–02:00); immersion is modelled as zero.'} “Modelled heat-call starts” are not reliable predictions of physical compressor starts.</div>${actualContext}<div class="tablewrap"><table><thead><tr><th>Strategy</th><th>Sunroom 08:00 / 11:00 / 15:30</th><th>Hours below 21°C</th><th>ASHP electricity</th><th>Overnight / daytime grid</th><th>Projected cost</th><th>Libbi SOC 08:00 / 15:30 / 20:00</th><th>Predicted depletion</th><th>Modelled heat-call starts</th></tr></thead><tbody>${scenarios.map(x=>`<tr><td>${esc(x.schedule.name)}</td><td>${replayNum(x.sunroomAt['08:00'],1)} / ${replayNum(x.sunroomAt['11:00'],1)} / ${replayNum(x.sunroomAt['15:30'],1)}°C</td><td>${replayNum(x.below21Hours,1)} h</td><td>${replayNum(x.totalHeatElectric,1)} kWh</td><td>${replayNum(x.nightImport,1)} / ${replayNum(x.dayImport,1)} kWh</td><td>${replayMoney(x.totalCost)}</td><td>${replayNum(x.socAt['08:00'],0)} / ${replayNum(x.socAt['15:30'],0)} / ${replayNum(x.socAt['20:00'],0)}%</td><td>${x.libbiDepletionTime===null?'Not depleted':`${Math.floor(x.libbiDepletionTime).toString().padStart(2,'0')}:${Math.round((x.libbiDepletionTime%1)*60).toString().padStart(2,'0')}`}</td><td>${x.starts}</td></tr>`).join('')}</tbody></table></div>${future?'':`<div class="replaymetrics"><article><span>Held-out hourly room RMSE</span><b>${replayNum(val?.rmse,2)}°C</b></article><article><span>Held-out 15-min conditional RMSE</span><b>${replayNum(rmse15.rmse,2)}°C</b></article></div>`}<p class="tablefoot">${future?'Results run through 23:00. Costs use the 15.56p/kWh 01:00–08:00 tariff, 32.04p/kWh day tariff and prorated 13.33p/day standing charge, with measured household demand profile and battery dispatch.':'Projected totals include modelled space-heating and DHW electricity, hourly household load, solar, Libbi dispatch, the 15.56p/32.04p rates and prorated standing charge.'} Prediction uncertainty is substantial: held-out room RMSE is ${replayNum(val?.rmse,2)}°C hourly and ${replayNum(rmse15.rmse,2)}°C at 15-minute conditional horizons, before counterfactual schedule error. Differences smaller than this comfort uncertainty should not be treated as a reliable ranking. Battery depletion depends on forecast household demand and solar shape.</p>`;
  }else if(replayTab==='events'){
   const r=classifyCompressorEvents(),examples=[...r.possibleDefrost.slice(0,2),...r.thermostatShutdown.slice(0,2),...r.shortCycling.slice(0,2)],dayEvents=r.events.filter(x=>x.start.startsWith(day));
   const events=examples.map(e=>`<tr><td>${e.start.replace('T',' ').slice(0,16)} UTC</td><td>${e.stopClass}</td><td>${Math.round(e.stopConfidence*100)}% heuristic confidence</td><td>${e.minutes} min</td><td>${e.defrostEvidence.join('; ')||'No strong defrost signature in available channels'}</td></tr>`).join('');
@@ -249,17 +266,18 @@ $('closeDialog').addEventListener('click',()=>$('infoDialog').close());
 $('infoDialog').addEventListener('click',e=>{if(e.target===$('infoDialog')){const r=e.target.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)e.target.close();}});
 $('exportCsv').addEventListener('click',exportCsv);
 renderScenarioTabs();renderControls();renderResults();
-for(const event of ['change','input'])for(const id of ['replayDay','comfortTarget','flowTarget','includeZendure'])$(id).addEventListener(event,renderReplay);
+for(const event of ['change','input'])for(const id of ['replayDay','comfortTarget','wcOffset','includeZendure','boostStart','boostEnd','boostFlow','soakStart','soakEnd','soakFlow','normalSetback','extendedSetback','setbackTarget'])$(id).addEventListener(event,renderReplay);
 $('replayTabs').addEventListener('click',e=>{const b=e.target.closest('[data-replay-tab]');if(b)replayTabChange(b.dataset.replayTab);});
 
 function showReplay(bundle){
  const daySelect=$('replayDay'), previous=daySelect.value;
  useReplay(bundle);
- const days=allReplayDays();
- daySelect.innerHTML=days.map(day=>`<option value="${esc(day)}">${replayDayLabel(day)}${dailyMeasurements(day).complete?'':' · partial'}</option>`).join('');
+ const days=[...new Set([...allReplayDays(),...(bundle.forecastHours||[]).map(row=>row.day)])].sort();
+ daySelect.innerHTML=days.map(day=>`<option value="${esc(day)}">${replayDayLabel(day)}${(bundle.forecastHours||[]).some(row=>row.day===day)?' · forecast':dailyMeasurements(day).complete?'':' · partial'}</option>`).join('');
  daySelect.value=days.includes(previous)?previous:(replayTargetDays()[0]??days[0]);
  $('replayViews').hidden=false;
- $('replayStatus').textContent='Private replay loaded from the app’s local storage.';
+ const fitCount=modelFitSamples.filter(Number.isFinite).length?Math.min(...modelFitSamples.filter(Number.isFinite)):null;
+ $('replayStatus').textContent=fitCount===null?'Private replay loaded from the app’s local storage. Room coefficients were supplied with the bundle.':`Private replay loaded from local storage. Room model fit from ${fitCount} hourly training intervals per room; sparse input lowers confidence.`;
  renderReplay();
 }
 
@@ -279,6 +297,21 @@ async function loadReplay(){
 
 async function startReplay(){
  await loadReplay();
+ await refreshSyncStatus();
+ $('syncHistory').addEventListener('click',async()=>{
+  const button=$('syncHistory');button.disabled=true;$('syncStatus').textContent='Reading selected Home Assistant history…';
+  try{
+   const response=await fetch('api/sync',{method:'POST',headers:{'Content-Type':'application/json','X-Energy-Lab-Sync':'1'},body:'{}'});
+   const status=await response.json();
+   if(!response.ok)throw new Error(status.error||'Home Assistant history sync failed.');
+   await refreshSyncStatus(status);
+   const replay=await fetch('api/replay?source=recorder');
+   if(!replay.ok)throw new Error('Sync completed, but the saved replay could not be reloaded.');
+   showReplay(await replay.json());
+   await refreshSyncStatus(status);
+  }catch(error){$('syncStatus').textContent=error.message||'Home Assistant history sync failed.';}
+  finally{button.disabled=false;}
+ });
  $('replayUpload').disabled=false;
  $('replayImport').addEventListener('submit',async event=>{
   event.preventDefault();
@@ -300,5 +333,24 @@ async function startReplay(){
    button.disabled=false;
   }
  });
+}
+
+function formatSyncTime(value){
+ if(!value)return 'Not yet imported';
+ const date=new Date(value);return Number.isNaN(date.valueOf())?'Unknown':date.toLocaleString('en-GB',{timeZone:'Europe/London'});
+}
+async function refreshSyncStatus(override=null){
+ try{
+  const status=override||(await (await fetch('api/sync-status')).json());
+  const lines=[];
+  lines.push(status.ok?'Connected · read-only':'Connection: '+(status.status||'not synced'));
+  lines.push('Last successful import: '+formatSyncTime(status.last_success));
+  if(status.covered_from&&status.covered_to)lines.push('Recorder coverage: '+status.covered_from.slice(0,10)+' to '+status.covered_to.slice(0,10)+` · ${status.hourly_rows||0} hourly rows, ${status.five_minute_rows||0} five-minute rows`);
+  const missing=[...(status.missing_roles||[]),...(status.missing_entities||[])];
+  if(missing.length)lines.push('Missing data: '+missing.join(', '));
+  if(status.warnings?.length)lines.push('Data quality: '+status.warnings.join(' '));
+  if(status.error)lines.push('Error: '+status.error);
+  $('syncStatus').textContent=lines.join('\n');
+ }catch{$('syncStatus').textContent='Sync status could not be loaded.';}
 }
 if(typeof window!=='undefined')void startReplay();

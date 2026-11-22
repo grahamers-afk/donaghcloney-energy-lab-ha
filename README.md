@@ -2,7 +2,7 @@
 
 An energy planning simulator with a separate historical heating replay. The daily simulator has editable tariff, heating, solar, battery and EV scenarios, charts, energy-balance checks and CSV export. It runs independently of historical data.
 
-The app accepts a private replay bundle through Home Assistant Ingress. Imported data and fitted room coefficients are stored on the Home Assistant host. The app requires no Home Assistant API access or credentials. Scenario edits are stored in the current browser.
+The app accepts a private replay bundle through Home Assistant Ingress. Imported data and fitted room coefficients are stored on the Home Assistant host. Manual import works without credentials. Optional Recorder sync requires the separately installed Energy Lab Bridge integration and a shared key configured at runtime. App Store updates install the app only. The bridge integration must be set up separately before sync can work. Scenario edits are stored in the current browser.
 
 See [app documentation](donaghcloney_energy_lab/DOCS.md) for installation, import, backups and model limits.
 

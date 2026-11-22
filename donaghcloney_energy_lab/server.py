@@ -6,6 +6,8 @@ import math
 import os
 import re
 import tempfile
+import threading
+import time
 from datetime import date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +22,8 @@ INGRESS_PROXY_IP = '172.30.32.2'
 MAX_REPLAY_BYTES = 8 * 1024 * 1024
 FIVE_POINT_LENGTH = 25
 FIVE_SOURCES = {'audit', 'ha-history'}
+SYNC_INTERVAL_SECONDS = 6 * 60 * 60
+SYNC_LOCK = threading.Lock()
 
 
 def number(value):
@@ -79,9 +83,9 @@ def validated_replay(raw):
     historic, recent, points, fit = (bundle.get(key) for key in ('historicHours', 'recentHours', 'fiveMinute', 'fit'))
     if not isinstance(historic, list) or not isinstance(recent, list) or not historic or not recent:
         raise ValueError('Replay requires historic and recent hourly rows')
-    if len(historic) + len(recent) > 2500 or not all(hourly_row(row) for row in historic + recent):
+    if len(historic) + len(recent) > 10000 or not all(hourly_row(row) for row in historic + recent):
         raise ValueError('Invalid hourly replay rows')
-    if not isinstance(points, list) or not points or len(points) > 12000 or not all(five_point(row) for row in points):
+    if not isinstance(points, list) or not points or len(points) > 20000 or not all(five_point(row) for row in points):
         raise ValueError('Invalid five-minute replay rows')
     params = fit.get('params') if isinstance(fit, dict) else None
     if not isinstance(params, list) or len(params) != 4 or not all(
@@ -109,8 +113,55 @@ def save_replay(body):
             temporary.unlink(missing_ok=True)
 
 
+def save_sync_status(status):
+    status_path = DATA / 'import-status.json'
+    DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=DATA, prefix='.sync-', mode='w', encoding='utf-8', delete=False) as file:
+        temporary = Path(file.name)
+        try:
+            json.dump(status, file, separators=(',', ':'), allow_nan=False)
+            file.flush()
+            os.fsync(file.fileno())
+            file.close()
+            temporary.replace(status_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def load_sync_status():
+    try:
+        return json.loads((DATA / 'import-status.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {'ok': False, 'last_success': None, 'status': 'not yet synced'}
+
+
+def sync_home_assistant():
+    if not SYNC_LOCK.acquire(blocking=False):
+        return {'ok': False, 'error': 'A Home Assistant history sync is already running.'}
+    try:
+        previous = load_sync_status()
+        started = datetime.now().astimezone().isoformat()
+        from ha_sync import sync_once
+        result = sync_once()
+        result['started_at'] = started
+        result['status'] = 'connected' if result.get('ok') else 'error'
+        result['last_attempt'] = datetime.now().astimezone().isoformat()
+        if not result.get('ok'):
+            result = {**previous, **result}
+        save_sync_status(result)
+        return result
+    except Exception as error:
+        result = {'ok': False, 'status': 'error', 'error': str(error)[:400],
+                  'last_attempt': datetime.now().astimezone().isoformat(),
+                  'last_success': load_sync_status().get('last_success')}
+        save_sync_status(result)
+        return result
+    finally:
+        SYNC_LOCK.release()
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'DonaghcloneyEnergyLab/0.3.0'
+    server_version = 'DonaghcloneyEnergyLab/0.3.1'
 
     def _headers(self, status, content_type):
         self.send_response(status)
@@ -138,12 +189,22 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._ingress_only():
             return
-        path = urlsplit(self.path).path
+        request_url = urlsplit(self.path)
+        path = request_url.path
+        if path == '/api/sync-status':
+            self._json(load_sync_status())
+            return
         if path != '/api/replay':
             self._static(path)
             return
         try:
-            body = (DATA / 'replay-bundle.json').read_bytes()
+            try:
+                replay_name = 'recorder-replay.json' if request_url.query == 'source=recorder' else 'replay-bundle.json'
+                body = (DATA / replay_name).read_bytes()
+            except FileNotFoundError:
+                if replay_name == 'recorder-replay.json':
+                    raise
+                body = (DATA / 'recorder-replay.json').read_bytes()
         except FileNotFoundError:
             self._json({'error': 'Import a private replay bundle to begin'}, 404)
         except OSError:
@@ -154,7 +215,21 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._ingress_only():
             return
-        if urlsplit(self.path).path != '/api/replay':
+        path = urlsplit(self.path).path
+        if path == '/api/sync':
+            if self.headers.get('X-Energy-Lab-Sync') != '1' or self.headers.get_content_type() != 'application/json':
+                self._json({'error': 'Use the Energy Lab history sync control.'}, 415)
+                return
+            length_header = self.headers.get('Content-Length', '0')
+            if not re.fullmatch(r'[0-9]{1,5}', length_header) or int(length_header) > 1024:
+                self._json({'error': 'Sync request is too large.'}, 413)
+                return
+            if int(length_header):
+                self.rfile.read(int(length_header))
+            result = sync_home_assistant()
+            self._json(result, 200 if result.get('ok') else 502)
+            return
+        if path != '/api/replay':
             self._json({'error': 'Not found'}, 404)
             return
         if self.headers.get('X-Energy-Lab-Import') != '1' or self.headers.get_content_type() != 'application/json':
@@ -221,6 +296,19 @@ def main():
         raise SystemExit('Required simulator directory is missing')
     DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
     server = ThreadingHTTPServer(('0.0.0.0', 8099), Handler)
+    def scheduled_sync():
+        time.sleep(10)
+        while True:
+            options = {}
+            try:
+                from ha_sync import _read_options
+                options = _read_options()
+            except Exception:
+                pass
+            if options.get('bridge_url') and options.get('bridge_secret'):
+                sync_home_assistant()
+            time.sleep(SYNC_INTERVAL_SECONDS)
+    threading.Thread(target=scheduled_sync, name='energy-lab-history-sync', daemon=True).start()
     print('Energy Lab Ingress server listening on port 8099', flush=True)
     server.serve_forever()
 

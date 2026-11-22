@@ -1,6 +1,6 @@
 name: Donaghcloney Energy Lab
 slug: donaghcloney_energy_lab
-version: 0.3.0
+version: 0.3.1
 description: Energy simulator and historical heating replay with private local import.
 arch:
   - amd64
@@ -13,7 +13,13 @@ ingress_port: 8099
 panel_icon: mdi:home-lightning-bolt
 panel_title: Energy Lab
 panel_admin: true
-homeassistant_api: false
 hassio_api: false
-options: {}
-schema: {}
+homeassistant_api: false
+options:
+  bridge_url: http://homeassistant:8123/api/energy_lab_bridge
+  bridge_secret: ""
+  history_days: 180
+schema:
+  bridge_url: str
+  bridge_secret: password
+  history_days: int

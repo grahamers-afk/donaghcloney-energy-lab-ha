@@ -6,6 +6,7 @@
   <meta name="description" content="An energy simulator and private historical heating replay for Home Assistant.">
   <meta name="robots" content="noindex,nofollow">
   <link rel="stylesheet" href="./style.css">
+  <style>#syncStatus{white-space:pre-line}.scheduleeditor{margin:16px 0;padding-top:10px;border-top:1px solid #e4e8e3}.scheduleeditor summary{cursor:pointer;font-size:11px;color:#52665c}.schedulegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px;padding:12px 0}.schedulegrid label{font-size:10px;color:#697a6c;display:grid;gap:5px}.schedulegrid input{min-width:0;border:1px solid #e4e8e3;border-radius:7px;padding:7px;color:#1e302d;background:#fafbf8}</style>
 </head>
 <body>
 <header class="topbar"><a class="brand" href="./" aria-label="Home Energy Lab home"><span class="brandmark">⌁</span><span>home energy<span class="brandlight"> / lab</span></span></a><div class="topright"><span class="location">Donaghcloney, NI</span><span class="private"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 018 0v3"/></svg> Private · only you</span></div></header>
@@ -23,18 +24,30 @@
 <section class="panel comparepanel"><div class="panelhead"><div><p class="eyebrow">THE BIGGER PICTURE</p><h2>Compare your scenarios</h2></div><button class="textbutton compact" id="exportCsv">Export CSV ↓</button></div><div class="tablewrap"><table><thead><tr><th scope="col">Scenario</th><th scope="col">Grid import</th><th scope="col">Day rate</th><th scope="col">Cost / day</th><th scope="col">vs reference</th></tr></thead><tbody id="comparisonRows"></tbody></table></div><p class="tablefoot">Same representative day repeated. Differences can include changes in demand or weather. No annual savings claim.</p></section>
 <section class="panel replaypanel" id="heatingReplay" aria-labelledby="replayTitle">
  <div class="panelhead"><div><p class="eyebrow">HEATING REPLAY</p><h2 id="replayTitle">Compare heating against your measured history</h2></div><span class="badge">Read-only historical data</span></div>
- <p class="fieldintro">Import a Home Assistant replay bundle to compare historical measurements with 15-minute heating estimates. “Measured”, “Calculated” and “Model estimate” are marked separately.</p>
- <form id="replayImport">
+ <p class="fieldintro">The Energy Lab reads selected Home Assistant Recorder statistics through the local bridge. Imported history stays in this app’s private data folder.</p>
+ <div class="synccontrols"><button class="smallbutton" id="syncHistory">Sync Home Assistant history</button><p id="syncStatus" class="fieldintro" role="status" aria-live="polite">Checking local history sync status…</p></div>
+ <details id="manualReplayImport"><summary>Import a replay file (optional fallback)</summary><form id="replayImport">
   <label>Private replay bundle <input id="replayFile" type="file" accept=".json,application/json" required></label>
   <button class="smallbutton" id="replayUpload" disabled>Import or replace replay</button>
- </form>
+ </form></details>
  <p id="replayStatus" class="fieldintro" role="status"></p>
  <div id="replayViews" hidden>
  <div class="replaycontrols">
   <label>Historical day<select id="replayDay"></select></label>
   <label>Comfort target · sunroom °C<input id="comfortTarget" type="number" min="19" max="24" step="0.1" value="21.5"></label>
-  <label>Boost / soak flow °C<input id="flowTarget" type="number" min="48" max="52" step="0.5" value="50"></label>
+  <label>WC offset °C<input id="wcOffset" type="number" min="40" max="55" step="0.5" value="48"></label>
   <label class="checkfield"><input id="includeZendure" type="checkbox"> Include optional Zendure · 8.16 kWh / 0.8 kW</label>
+  <details class="scheduleeditor"><summary>Heating schedule times and flow temperatures</summary><div class="schedulegrid">
+   <label>Boost starts<input id="boostStart" type="time" step="300" value="06:30"></label>
+   <label>Boost ends<input id="boostEnd" type="time" step="300" value="07:50"></label>
+   <label>Boost flow °C<input id="boostFlow" type="number" min="40" max="55" step="0.5" value="50"></label>
+   <label>Full soak starts<input id="soakStart" type="time" step="300" value="04:00"></label>
+   <label>Full soak ends<input id="soakEnd" type="time" step="300" value="07:50"></label>
+   <label>Soak flow °C<input id="soakFlow" type="number" min="40" max="55" step="0.5" value="52"></label>
+   <label>Normal Ember setback<input id="normalSetback" type="time" step="300" value="08:00"></label>
+   <label>Extended WC setback<input id="extendedSetback" type="time" step="300" value="10:00"></label>
+   <label>Setback target °C<input id="setbackTarget" type="number" min="10" max="22" step="0.5" value="18"></label>
+  </div></details>
  </div>
  <div class="replaytabs" id="replayTabs" role="tablist" aria-label="Heating replay views">
   <button class="selected" data-replay-tab="weather" role="tab" aria-selected="true">Weather matches</button>

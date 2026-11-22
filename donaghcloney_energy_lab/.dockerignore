@@ -1,6 +1,7 @@
 **
 !Dockerfile
 !server.py
+!ha_sync.py
 !app/
 !app/dist/
 !app/dist/index.html

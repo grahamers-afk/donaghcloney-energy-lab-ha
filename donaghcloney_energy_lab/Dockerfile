@@ -5,6 +5,7 @@ RUN apk add --no-cache python3
 
 WORKDIR /app
 COPY server.py /app/server.py
+COPY ha_sync.py /app/ha_sync.py
 COPY app/dist/ /app/dist/
 
 EXPOSE 8099

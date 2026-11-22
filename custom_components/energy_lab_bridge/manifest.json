@@ -1,0 +1,16 @@
+{
+  "domain": "energy_lab_bridge",
+  "name": "Energy Lab Read-only History Bridge",
+  "codeowners": [
+    "@grahamers-afk"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "recorder"
+  ],
+  "documentation": "https://github.com/grahamers-afk/donaghcloney-energy-lab-ha",
+  "iot_class": "local_polling",
+  "requirements": [],
+  "version": "1.0.0",
+  "issue_tracker": "https://github.com/grahamers-afk/donaghcloney-energy-lab-ha/issues"
+}

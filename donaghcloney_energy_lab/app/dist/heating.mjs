@@ -25,6 +25,7 @@ const FIVE_KEYS = [
 ];
 const cv=(x)=>Number.isFinite(Number(x))?Number(x):null;
 export let historicHours = [], recentHours = [], allHours = [], fiveMinute = [];
+export let forecastHours = [], liveSnapshot = {}, forecastMeta = {};
 let MODEL = [];
 
 export function useReplay(bundle){
@@ -32,8 +33,22 @@ export function useReplay(bundle){
   recentHours = bundle.recentHours;
   allHours = [...historicHours,...recentHours].sort((a,b)=>Date.parse(a.z)-Date.parse(b.z));
   fiveMinute = bundle.fiveMinute.map(asPoint);
-  MODEL = bundle.fit.params;
+  forecastHours = Array.isArray(bundle.forecastHours)?bundle.forecastHours:[];
+  liveSnapshot = bundle.liveSnapshot||{};
+  forecastMeta = bundle.forecastMeta||{};
+  const supplied=bundle.fit?.params;
+  if(Array.isArray(supplied)&&supplied.length===4&&supplied.every(row=>Array.isArray(row)&&row.length===7)){
+    MODEL=supplied;modelFitSamples=Array(4).fill(null);
+  }else{
+    modelFitSamples=Array.from({length:4},(_,j)=>trainingRows(j).length);
+    MODEL=Array.from({length:4},(_,j)=>{
+      const samples=trainingRows(j);
+      return samples.length>=24?fit(samples):[0,.2,.1,.10,.02,.04,.07];
+    });
+  }
 }
+
+export let modelFitSamples = [];
 
 export function replayTargetDays(){
   const days = new Set(fiveMinute.filter(p=>p.source==='ha-history').map(p=>p.t.slice(0,10)));
@@ -212,6 +227,7 @@ function trainingRows(roomIndex){
   return historicHours.slice(0,-1).flatMap((r,i)=>{
     const n=historicHours[i+1];if(Date.parse(n.z)-Date.parse(r.z)!==3600000)return [];
     const y=n.rooms[roomIndex]-r.rooms[roomIndex];if(!Number.isFinite(y)||Math.abs(y)>limits[roomIndex])return [];
+    if(!Number.isFinite(r.spaceThermalKwh)||!Number.isFinite(n.spaceThermalKwh))return [];
     const q=(r.spaceThermalKwh+n.spaceThermalKwh)/2;
     return [{day:r.day,x:[...roomFeatures(r.rooms,{outdoor:(r.outdoor+n.outdoor)/2,wind:(r.wind+n.wind)/2,irradiance:(r.irradiance+n.irradiance)/2,hour:r.hr},roomIndex),q],y}];
   });
@@ -300,8 +316,8 @@ function forecastHour(row,rooms,mode,flowC,target,offset,coefficient,dt=0.25){
   return {next,heatKwh,heatElectricKwh:heatKwh/cop+0.035*dt,flow,cop,capacityKwh:capacity,requestedKwh:requested};
 }
 
-function stepBattery({soc,homeKwh,solarKwh,ashpKwh,hour,libbi,zendure}){
-  const eta=Math.sqrt(HEATING_LIMITS.batteryRoundTrip),dt=0.25;
+function stepBattery({soc,homeKwh,solarKwh,ashpKwh,hour,libbi,zendure,dtHours=0.25}){
+  const eta=Math.sqrt(libbi.efficiency??HEATING_LIMITS.batteryRoundTrip),dt=dtHours;
   let demand=homeKwh+ashpKwh,solar=Math.max(0,solarKwh),net=Math.max(0,demand-solar),surplus=Math.max(0,solar-demand),exported=0;
   let gridCharge=0,solarCharge=0,libbiDischarge=0,zendureDischarge=0,zendureGridCharge=0;
   const inCheap=hour>=1&&hour<8;
@@ -312,8 +328,9 @@ function stepBattery({soc,homeKwh,solarKwh,ashpKwh,hour,libbi,zendure}){
     zSoc+=zendureGridCharge*eta;
   }
   if(inCheap){
-    gridCharge=Math.min(Math.max(0,libbi.powerKw*dt-solarCharge),(libbi.capacityKwh-soc)/eta,Math.max(0,HEATING_LIMITS.libbiCapacityKwh-soc)/eta);
-    soc=Math.min(HEATING_LIMITS.libbiCapacityKwh,soc+gridCharge*eta);
+    const chargeTarget=libbi.chargeTargetKwh??libbi.capacityKwh;
+    gridCharge=Math.min(Math.max(0,libbi.powerKw*dt-solarCharge),Math.max(0,chargeTarget-soc)/eta,Math.max(0,HEATING_LIMITS.libbiCapacityKwh-soc)/eta);
+    soc=Math.min(chargeTarget,soc+gridCharge*eta);
   }else{
     if(zendure.enabled){zendureDischarge=Math.min(net,zendure.powerKw*dt,zSoc*eta);zSoc-=zendureDischarge/eta;net-=zendureDischarge;}
     libbiDischarge=Math.min(net,libbi.powerKw*dt,Math.max(0,soc-libbi.reserveKwh)*eta);soc-=libbiDischarge/eta;net-=libbiDischarge;
@@ -368,6 +385,117 @@ export function simulateHeatingStrategy(day,mode,{flowC=50,targetC=21.5,offset=4
     minSunroom,meanSunroom,unmetIntervals,socStart:startSoc,socEnd:endSoc,minSoc,libbiDepletionKwh:Math.max(0,startSoc-endSoc),libbiDischargedKwh:totalLibbiDischarge,zendureDischargedKwh:totalZendureDischarge,zendureGridChargeKwh:totalZendureCharge,
     zendureStart:0,zendureEnd:zSoc,
     measuredDaily:dailyMeasurements(day,rows.length).electricKwh};
+}
+
+export const STANDARD_HEATING_SCHEDULES = Object.freeze([
+  {id:'wc48-only',name:'WC48 only',kind:'wc',setbackAt:8,setbackTargetC:18},
+  {id:'short-boost',name:'Short boost',kind:'wc-boost',boostStart:6.5,boostEnd:7+50/60,boostFlowC:50,setbackAt:8,setbackTargetC:18},
+  {id:'full-soak',name:'Full soak',kind:'soak-wc',soakStart:4,soakEnd:7+50/60,soakFlowC:52,setbackAt:8,setbackTargetC:18},
+  {id:'extended-wc',name:'Extended WC',kind:'wc',setbackAt:10,setbackTargetC:18}
+]);
+
+function scheduleFlow(schedule,hour,outdoor){
+  const wc=clamp((schedule.offsetC??48)-0.8*(outdoor??5),33,50);
+  if(schedule.kind==='fixed')return schedule.fixedFlowC;
+  if(schedule.kind==='soak-wc'&&hour>=(schedule.soakStart??4)&&hour<(schedule.soakEnd??8))return schedule.soakFlowC??52;
+  if(schedule.kind==='wc-boost'&&hour>=(schedule.boostStart??6.5)&&hour<(schedule.boostEnd??7.833333))return schedule.boostFlowC??50;
+  return wc;
+}
+
+function scheduledTarget(schedule,hour,targetC){
+  return hour>=(schedule.setbackAt??24)?(schedule.setbackTargetC??18):targetC;
+}
+
+function forecastScheduleStep(row,rooms,schedule,targetC,flowCoefficient,dt){
+  const hour=row.hr;
+  const conditions={outdoor:row.outdoor,wind:row.wind,irradiance:row.irradiance,hour};
+  const noHeat=temperatureStep(rooms,conditions,0,dt),setpoint=scheduledTarget(schedule,hour,targetC);
+  const heatCoefficient=MODEL[0]?.[6]??0.07;
+  const requested=heatCoefficient>0?Math.max(0,(setpoint-noHeat[0]+0.22*dt*(setpoint-rooms[0]))/heatCoefficient):0;
+  const flow=scheduleFlow(schedule,hour,row.outdoor);
+  const capacity=thermalCapacity(flow,rooms,row.outdoor,flowCoefficient)*dt;
+  const heatKwh=Math.min(requested,capacity);
+  const next=temperatureStep(rooms,conditions,heatKwh,dt);
+  const cop=clamp((3.75+0.081*((row.outdoor??5)-5)-0.065*(flow-43)),2.73,4.8);
+  return {next,heatKwh,heatElectricKwh:heatKwh/cop+0.035*dt,flow,cop};
+}
+
+export function simulateHeatingSchedule(day,schedule,{
+  targetC=22.5,coefficient=HEATING_LIMITS.emitterCoefficient,battery=true,
+  nightRate=HEATING_LIMITS.currentNightP,dayRate=HEATING_LIMITS.currentDayP,
+  batteryCapacityKwh=null,batteryPowerKw=HEATING_LIMITS.libbiPowerKw,batteryChargeTargetKwh=null,
+  batteryEfficiency=HEATING_LIMITS.batteryRoundTrip,startSocPct=null,standingP=HEATING_LIMITS.standingP,
+  dhwElectricKwh=2.8,dhwStart=1,dhwEnd=2,immersionKwh=0,immersionStart=5.75
+}={}){
+  const future=forecastHours.some(row=>row.day===day),capacity=Number.isFinite(batteryCapacityKwh)?batteryCapacityKwh:(liveSnapshot.libbi_capacity?.value||HEATING_LIMITS.libbiCapacityKwh);
+  let rows,initialRooms,socStartPct,preludeHours=0;
+  if(future){
+    if(modelFitSamples.length<4||modelFitSamples.some(count=>!Number.isFinite(count)||count<24))return null;
+    const roomValues=['sunroom','kitchen','living_room','hallway'].map(role=>liveSnapshot[role]?.value);
+    if(roomValues.some(value=>!Number.isFinite(value)))return null;
+    const captured=Date.parse(liveSnapshot.captured_at||'');
+    if(!Number.isFinite(captured))return null;
+    const nextHour=new Date(captured);nextHour.setUTCMinutes(0,0,0);if(nextHour.getTime()<captured)nextHour.setUTCHours(nextHour.getUTCHours()+1);
+    const startIso=nextHour.toISOString().replace('.000Z','Z');
+    rows=forecastHours.filter(row=>row.z>=startIso&&row.day<=day).sort((a,b)=>a.z.localeCompare(b.z));
+    if(new Set(rows.filter(row=>row.day===day).map(row=>row.hr)).size!==24)return null;
+    initialRooms=roomValues;
+    socStartPct=Number.isFinite(startSocPct)?startSocPct:liveSnapshot.libbi_soc?.value;
+    preludeHours=rows.filter(row=>row.day<day).length;
+  }else{
+    rows=allHours.filter(row=>row.day===day).sort((a,b)=>a.hr-b.hr);
+    if(!rows.length)return null;
+    const first=rows.find(row=>row.hr===0)||rows[0];
+    initialRooms=[...first.rooms];
+    socStartPct=Number.isFinite(startSocPct)?startSocPct:(first.libbiSoc??null);
+  }
+  if(!Number.isFinite(socStartPct)||!Number.isFinite(capacity)||capacity<=0)return null;
+  let rooms=[...initialRooms];
+  let soc=clamp(socStartPct/100*capacity,0,capacity),minSoc=soc;
+  const chargeTarget=batteryChargeTargetKwh??liveSnapshot.libbi_charge_target?.value??capacity;
+  const libbi={capacityKwh:capacity,chargeTargetKwh:Math.min(capacity,chargeTarget),powerKw:batteryPowerKw,reserveKwh:0,nightRate,dayRate,exportRate:0,efficiency:batteryEfficiency};
+  const dt=1/12,intervals=[];let totalHeat=0,totalHeatElectric=0,totalCost=0,totalGrid=0,totalNight=0,totalDay=0,totalLibbiDischarge=0,starts=0,compressorOn=false,depletionAt=null,below21=0,midnightSocPct=null;
+  const prelude={...schedule,kind:'wc',offsetC:schedule.offsetC??48,setbackAt:24};
+  for(const source of rows){
+    for(let q=0;q<12;q++){
+      const hour=source.hr+q/12,row={...source,hr:hour};
+      const inTargetDay=source.day===day,activeSchedule=inTargetDay?schedule:prelude;
+      const dhwOn=inTargetDay&&hour>=dhwStart&&hour<dhwEnd;
+      const roomTarget=inTargetDay?targetC:(liveSnapshot.thermostat_target?.value||targetC);
+      const result=forecastScheduleStep(row,rooms,activeSchedule,roomTarget,coefficient,dt);
+      if(dhwOn){
+        rooms=temperatureStep(rooms,{outdoor:row.outdoor,wind:row.wind,irradiance:row.irradiance,hour},0,dt);
+        result.heatKwh=0;result.heatElectricKwh=0.035*dt;
+      }else rooms=result.next;
+      const shouldRun=result.heatKwh>0.001;
+      if(shouldRun&&!compressorOn)starts++;
+      compressorOn=shouldRun;
+      const immersionOn=inTargetDay&&hour>=immersionStart&&hour<immersionStart+1;
+      const home=Math.max(0,(source.houseKwh||0)/12)+(immersionOn?immersionKwh/12:0);
+      const dhwElectric=dhwOn?dhwElectricKwh/((dhwEnd-dhwStart)*12):0;
+      const ashpElectric=result.heatElectricKwh+dhwElectric;
+      const solar=Math.max(0,(source.solarKwh||0)/12);
+      const batteryRow=battery?stepBattery({soc,homeKwh:home,solarKwh:solar,ashpKwh:ashpElectric,hour,libbi,zendure:{enabled:false,soc:0,capacityKwh:HEATING_LIMITS.zendureCapacityKwh,powerKw:HEATING_LIMITS.zendurePowerKw},dtHours:dt})
+        :{soc,imported:Math.max(0,home+ashpElectric-solar),libbiDischarge:0,cost:0,night:hour>=1&&hour<8};
+      const before=soc;soc=batteryRow.soc;
+      const intervalCost=battery?batteryRow.cost:(batteryRow.imported||0)*(hour>=1&&hour<8?nightRate:dayRate)/100;
+      minSoc=Math.min(minSoc,soc);
+      if(inTargetDay){
+        totalHeat+=result.heatKwh;totalHeatElectric+=ashpElectric;totalLibbiDischarge+=batteryRow.libbiDischarge||0;
+        totalGrid+=batteryRow.imported||0;if(batteryRow.night)totalNight+=batteryRow.imported||0;else totalDay+=batteryRow.imported||0;
+        totalCost+=intervalCost;if(!depletionAt&&before>0&&soc<=1e-8)depletionAt=hour+dt;
+        if(rooms[0]<21)below21+=dt;
+        intervals.push({hour,endHour:hour+dt,rooms:[...rooms],sunroomC:rooms[0],heatKwh:result.heatKwh,heatElectricKwh:ashpElectric,flowC:result.flow,cop:result.cop,dhwOn,compressorOn:shouldRun,soc,socPct:soc/capacity*100,gridKwh:batteryRow.imported||0,cost:intervalCost,night:Boolean(batteryRow.night)});
+      }else if(source.hr+1===24){midnightSocPct=soc/capacity*100;}
+    }
+  }
+  const at=hour=>intervals.find(x=>x.endHour>=hour-1e-8)||intervals.at(-1);
+  const last=intervals.at(-1);
+  return {day,schedule,complete:intervals.length===24*12,forecast:future,intervals,totalHeat,totalHeatElectric,totalCost:totalCost+standingP/100,totalGrid,nightImport:totalNight,dayImport:totalDay,totalLibbiDischarge,minSoc,socStart:socStartPct,projectedSocAtMidnight:midnightSocPct,socEnd:last?.socPct??soc/capacity*100,libbiDepletionTime:depletionAt,below21Hours:below21,starts,measuredAsHpElectric:null,sunroomAt:{'08:00':at(8)?.sunroomC??null,'11:00':at(11)?.sunroomC??null,'15:30':at(15.5)?.sunroomC??null,'23:00':at(23)?.sunroomC??null},socAt:{'08:00':at(8)?.socPct??null,'15:30':at(15.5)?.socPct??null,'20:00':at(20)?.socPct??null},method:future?'Forecast-driven five-minute run from the latest HA room and Libbi readings; a common WC48 evening prelude projects the state to target-day midnight. Solar output uses the HA daily forecast distributed by the measured hourly local profile.':'Five-minute replay simulation using the recorded day and common DHW estimate.'};
+}
+
+export function compareHeatingSchedules(day,schedules=STANDARD_HEATING_SCHEDULES,options={}){
+  return schedules.map(schedule=>simulateHeatingSchedule(day,schedule,options)).filter(Boolean);
 }
 
 export function compareHeatingStrategies(day,options={}){
