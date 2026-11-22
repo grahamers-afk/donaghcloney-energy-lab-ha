@@ -161,7 +161,7 @@ def sync_home_assistant():
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = 'DonaghcloneyEnergyLab/0.3.2'
+    server_version = 'DonaghcloneyEnergyLab/0.3.3'
 
     def _headers(self, status, content_type):
         self.send_response(status)

@@ -32,8 +32,27 @@ def _bridge_get(base_url, secret, path, query=None):
     if query:
         url += '?' + urlencode(query)
     request = Request(url, headers={'X-Energy-Lab-Key': secret, 'Accept': 'application/json'})
-    with build_opener(NoRedirects()).open(request, timeout=HTTP_TIMEOUT) as response:
-        return json.loads(response.read())
+    try:
+        with build_opener(NoRedirects()).open(request, timeout=HTTP_TIMEOUT) as response:
+            return json.loads(response.read())
+    except HTTPError as error:
+        label = f'Home Assistant bridge {path}'
+        if query and query.get('period') in {'hour', '5minute'}:
+            label += f" ({query['period']})"
+        reason = ''
+        if error.code == 400:
+            try:
+                message = json.loads(error.read(4096)).get('message', '')
+                if message in {
+                    'Use timezone-aware start and end timestamps',
+                    'Requested period exceeds the read-only bridge limit',
+                    'Select only discovered Energy Lab entities',
+                    'Select a Home Assistant weather entity',
+                }:
+                    reason = f' {message}.'
+            except (ValueError, AttributeError):
+                pass
+        raise ValueError(f'{label} returned HTTP {error.code}.{reason}') from error
 
 
 def _as_utc(value):
@@ -370,13 +389,16 @@ def sync_once():
             raise ValueError('The Home Assistant bridge did not confirm readiness.')
         discovered = _bridge_get(base_url, secret, 'entities')
         allowed = discovered.get('entities', {})
-        ids = sorted({entity['entity_id'] for role, values in allowed.items() if role != 'solar_forecast_daily' for entity in values})
+        current_selected = {role: _choose(allowed, role) for role in allowed}
+        ids = sorted({
+            entity_id for role, entity_id in current_selected.items()
+            if entity_id and role != 'solar_forecast_daily'
+        })
         if not ids:
             raise ValueError('The read-only bridge found no matching Home Assistant measurements.')
         previous_bundle = _load_private_json('recorder-replay.json')
         previous_status = _load_private_json('import-status.json') or {}
         previous_roles = previous_status.get('entity_roles', {})
-        current_selected = {role: _choose(allowed, role) for role in allowed}
         same_entities = previous_bundle and previous_roles == {r: e for r, e in current_selected.items() if e}
         previous_time = _as_utc(previous_status.get('last_success'))
         incremental = bool(same_entities and previous_time and end - previous_time < timedelta(hours=24))
@@ -458,7 +480,5 @@ def sync_once():
             'source': 'Home Assistant Recorder statistics via local read-only bridge',
             **summary,
         }
-    except HTTPError as error:
-        return {'ok': False, 'error': f'Home Assistant bridge returned HTTP {error.code}.'}
     except (URLError, TimeoutError, ValueError, OSError, json.JSONDecodeError) as error:
         return {'ok': False, 'error': str(error)[:400] or 'The Home Assistant history sync failed.'}

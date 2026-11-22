@@ -1,6 +1,6 @@
 name: Donaghcloney Energy Lab
 slug: donaghcloney_energy_lab
-version: 0.3.2
+version: 0.3.3
 description: Energy simulator and historical heating replay with private local import.
 arch:
   - amd64
